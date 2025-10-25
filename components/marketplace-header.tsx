@@ -17,6 +17,7 @@ import {
   useDisconnectWallet,
 } from "@mysten/dapp-kit";
 import { useMounted } from "@/hooks/use-mounted";
+import { useEffect } from "react";
 
 function shortAddr(addr?: string, head = 6, tail = 4) {
   if (!addr) return "";
@@ -76,9 +77,22 @@ function AccountMenu() {
   );
 }
 
+/** Debug helper: logs the origin, redirect URI, and client_id */
+function OAuthDebug() {
+  useEffect(() => {
+    const origin = window.location.origin;
+    const redirect = `${origin}/auth`;
+    // Check the browser console for these:
+    console.log("[OAuthDebug] origin =", origin);
+    console.log("[OAuthDebug] redirectUri (Enoki) =", redirect);
+    console.log("[OAuthDebug] client_id =", process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID);
+  }, []);
+  return null;
+}
+
 export function MarketplaceHeader() {
   const mounted = useMounted();
-  const account = useCurrentAccount(); // null until connected (and sometimes on first client frame)
+  const account = useCurrentAccount();
 
   const label = !mounted
     ? "Connect Wallet"
@@ -117,7 +131,7 @@ export function MarketplaceHeader() {
         </div>
 
         <div className="flex items-center gap-3">
-          {/* SSR-safe: render modal only after mount */}
+          {/* Render modal only after mount to avoid hydration mismatch */}
           {mounted ? (
             <ConnectModal
               trigger={
@@ -139,6 +153,9 @@ export function MarketplaceHeader() {
           <AccountMenu />
         </div>
       </div>
+
+      {/* Debug logger (remove after you verify Google settings) */}
+      <OAuthDebug />
     </header>
   );
 }

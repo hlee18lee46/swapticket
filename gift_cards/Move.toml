@@ -1,0 +1,8 @@
+[package]
+name = "gift_cards"
+version = "0.0.1"
+edition = "legacy"
+
+[addresses]
+gift_cards = "0x0"
+# (optional) you can remove 'publisher' entirely unless you use it in code
