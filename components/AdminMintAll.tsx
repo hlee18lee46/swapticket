@@ -1,40 +1,38 @@
+// components/admin-mint-all.tsx
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { useSignAndExecuteTransaction, useCurrentAccount } from "@mysten/dapp-kit";
-import { mintAllTicketsToSeller } from "@/utils/mint-tickets";
+import { mintTicketsForAllArtists } from "@/utils/mint-tickets";
 
 export function AdminMintAll() {
-  const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
   const account = useCurrentAccount();
+  const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
   const [busy, setBusy] = useState(false);
 
-  const pkg = process.env.NEXT_PUBLIC_PACKAGE_ID!;
-  const seller = process.env.NEXT_PUBLIC_SELLER_ADDRESS!;
-
-  const run = async () => {
+  const onMint = useCallback(async () => {
+    if (!account?.address) return alert("Connect a wallet first.");
+    setBusy(true);
     try {
-      setBusy(true);
-      if (!account?.address) throw new Error("Connect wallet first");
-      await mintAllTicketsToSeller({
-        packageId: pkg,
-        seller,
+      await mintTicketsForAllArtists({
+        packageId: process.env.NEXT_PUBLIC_PACKAGE_ID!,
+        seller: process.env.NEXT_PUBLIC_SELLER_ADDRESS!,
         signAndExecute,
       });
-      alert("✅ Minted 40 tickets to seller wallet!");
+      alert("Minted 40 tickets to seller wallet 🎉");
     } catch (e: any) {
       console.error(e);
       alert(`Mint failed: ${e?.message || e}`);
     } finally {
       setBusy(false);
     }
-  };
+  }, [account?.address, signAndExecute]);
 
   return (
     <button
-      onClick={run}
+      onClick={onMint}
       disabled={busy}
-      className="rounded-2xl px-4 py-2 font-semibold bg-primary text-primary-foreground shadow"
+      className="rounded-2xl px-5 py-3 font-semibold shadow-md bg-primary text-primary-foreground disabled:opacity-60"
     >
       {busy ? "Minting…" : "Mint 40 tickets to seller"}
     </button>
