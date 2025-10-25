@@ -1,3 +1,4 @@
+// app/providers.tsx
 "use client";
 
 import { useEffect, useState, type PropsWithChildren } from "react";
@@ -11,31 +12,36 @@ import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
 import { registerEnokiWallets } from "@mysten/enoki";
 import "@mysten/dapp-kit/dist/index.css";
 
-// 1) Networks
+// Networks
 const { networkConfig } = createNetworkConfig({
   testnet: { url: getFullnodeUrl("testnet") },
   // mainnet: { url: getFullnodeUrl("mainnet") },
 });
 
-// 2) Registers Enoki Google wallet alongside Slush & other wallets
+// Register Enoki (Google) only
 function RegisterEnoki({ network = "testnet" as const }) {
   useEffect(() => {
-    // Require env vars (frontend-safe)
     const apiKey = process.env.NEXT_PUBLIC_ENOKI_API_KEY;
     const googleClientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
     if (!apiKey || !googleClientId) return;
 
+    const origin = window.location.origin; // e.g., http://localhost:3000
     const client = new SuiClient({ url: getFullnodeUrl(network) });
+
     const { unregister } = registerEnokiWallets({
       client,
-      network,                 // "testnet" or "mainnet"
-      apiKey,                  // from Enoki portal (public key)
+      network,
+      apiKey,
       providers: {
-        google: { clientId: googleClientId }, // Google OAuth client id
+        google: {
+          clientId: googleClientId,
+          redirectUri: `${origin}/auth`, // explicit to avoid redirect_uri_mismatch
+        },
       },
     });
+
     return unregister;
-  }, []);
+  }, [network]);
 
   return null;
 }
@@ -46,14 +52,10 @@ export default function Providers({ children }: PropsWithChildren) {
   return (
     <QueryClientProvider client={queryClient}>
       <SuiClientProvider networks={networkConfig} defaultNetwork="testnet">
-        {/* Register Enoki Google wallet */}
         <RegisterEnoki network="testnet" />
-
-        {/* Enable Slush + autoConnect.
-            Slush will appear next to Enoki in dapp-kit’s wallet picker. */}
         <WalletProvider
           autoConnect
-          slushWallet={{ name: "SwapChain" }}  // shows Slush (extension/web)
+          slushWallet={{ name: "SwapChain" }} // Slush (extension/web)
         >
           {children}
         </WalletProvider>
