@@ -27,7 +27,7 @@ function RegisterEnoki({ network = "testnet" as const }) {
       providers: {
         google: {
           clientId: googleClientId,
-          redirectUri: `${origin}/auth`,  // must match Google Console URIs
+          redirectUrl: `${origin}/auth`,  // must match Google Console URIs
         },
       },
     });
