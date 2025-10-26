@@ -6,15 +6,6 @@ import { useCurrentAccount, useSignAndExecuteTransaction } from "@mysten/dapp-ki
 import { mistToSui } from "@/utils/price";
 import { buyListing } from "@/utils/buy";
 
-// Temporary: infer artist/seat until on-chain metadata includes them
-const inferArtist = (ticketId: string) => {
-  const id = ticketId.toLowerCase();
-  if (id.includes("90d5")) return "BILL";
-  if (id.includes("6c63")) return "BTS";
-  return "SABR";
-};
-const inferSeat = (_ticketId: string) => "Seat ?";
-
 type TuskyFile = {
   id: string;                // uploadId
   blobId: string | null;
@@ -23,80 +14,130 @@ type TuskyFile = {
   createdAt: string;         // millis string
 };
 
-type ListingJSON = {
-  kind: "listing";
-  listingId: string;         // <-- REQUIRED for buy
-  ticketId?: string;         // for display only
-  price: string;             // u64 (MIST) as string
+type AnyListingJSON = {
+  // support both legacy and new shapes
+  version?: number;
+  kind?: string;             // "listing" | "ticket-listing"
+  ticketId?: string;
+  // prices can be: price (mist), price_mist (mist), or price_sui (human)
+  price?: string;            // MIST
+  price_mist?: string;       // MIST
+  price_sui?: string;        // SUI (human string)
+  // meta
   network?: string;
-  createdAt?: string;
+  createdAt?: string;        // ISO
+  created_at?: string;       // ISO
+  artist_code?: number;
+  artist_name?: string;
+  seat?: number;
+  venue?: string;
 };
+
+// quick helpers
+const inferArtist = (ticketId: string) => {
+  const id = ticketId.toLowerCase();
+  if (id.includes("90d5")) return "BILL";
+  if (id.includes("6c63")) return "BTS";
+  if (id.includes("d055")) return "MARO"; // add your own hints if needed
+  return "SABR";
+};
+const inferSeat = (_: string) => "Seat ?";
+
+function pickCreatedAt(meta: AnyListingJSON, file: TuskyFile): string {
+  const iso = meta.created_at ?? meta.createdAt;
+  if (iso) return new Date(iso).toLocaleString();
+  return new Date(Number(file.createdAt || Date.now())).toLocaleString();
+}
+
+/** Return price in MIST as BigInt, accepting multiple shapes */
+function pickPriceMist(meta: AnyListingJSON): bigint | null {
+  // Priority: explicit mist field(s)
+  if (meta.price_mist) {
+    try { return BigInt(meta.price_mist); } catch {}
+  }
+  if (meta.price) {
+    // in our old shape, price was already MIST
+    try { return BigInt(meta.price); } catch {}
+  }
+  // Fallback: convert price_sui (string) → MIST
+  if (meta.price_sui && /^[0-9]*\.?[0-9]*$/.test(meta.price_sui)) {
+    const [whole = "0", fracRaw = ""] = meta.price_sui.split(".");
+    const frac = (fracRaw + "000000000").slice(0, 9);
+    try {
+      return BigInt(whole || "0") * 1_000_000_000n + BigInt(frac || "0");
+    } catch {}
+  }
+  return null;
+}
 
 export function TicketHub() {
   const account = useCurrentAccount();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
 
   const [files, setFiles] = useState<TuskyFile[]>([]);
-  const [rows, setRows] = useState<{ file: TuskyFile; meta: ListingJSON | null }[]>([]);
+  const [rows, setRows] = useState<{ file: TuskyFile; meta: AnyListingJSON | null }[]>([]);
   const [busyId, setBusyId] = useState<string>("");
 
   const pkg = process.env.NEXT_PUBLIC_PACKAGE_ID!;
-  const appNet = (process.env.NEXT_PUBLIC_SUI_NETWORK || "testnet").toLowerCase();
   const canBuy = useMemo(() => Boolean(account?.address), [account?.address]);
 
-  // 1) List files from Tusky (server route)
+  // 1) list Tusky files via our API
   useEffect(() => {
     (async () => {
       const r = await fetch("/api/tusky/list");
       if (!r.ok) return;
       const all: TuskyFile[] = await r.json();
-      // keep only listing JSONs we created: listing-0x...json
+      // keep our listing JSONs
       const listingFiles = all.filter((f) => /^listing-0x[0-9a-f]+\.json$/i.test(f.name));
       setFiles(listingFiles);
     })().catch(console.error);
   }, []);
 
-  // 2) For each file, read JSON by uploadId
+  // 2) read each listing JSON
   useEffect(() => {
     (async () => {
-      const out: { file: TuskyFile; meta: ListingJSON | null }[] = [];
+      const out: { file: TuskyFile; meta: AnyListingJSON | null }[] = [];
       for (const f of files) {
         try {
           const r = await fetch(`/api/tusky/read?uploadId=${encodeURIComponent(f.id)}`);
           if (!r.ok) throw new Error(await r.text());
-          const json = (await r.json()) as ListingJSON;
-          // Must have kind=listing, listingId, price; and (optional) network must match app
-          const ok =
-            json &&
-            json.kind === "listing" &&
-            typeof json.listingId === "string" &&
-            typeof json.price === "string" &&
-            (!json.network || json.network.toLowerCase() === appNet);
+          const json = (await r.json()) as AnyListingJSON;
 
-          out.push({ file: f, meta: ok ? json : null });
+          const kind = (json.kind || "").toLowerCase();
+          const isListing = kind === "listing" || kind === "ticket-listing";
+          const hasTicket = !!json.ticketId;
+          const hasPrice = pickPriceMist(json) !== null;
+
+          out.push({ file: f, meta: isListing && hasTicket && hasPrice ? json : null });
         } catch {
           out.push({ file: f, meta: null });
         }
       }
       setRows(out);
     })();
-  }, [files, appNet]);
+  }, [files]);
 
-  const onBuy = async (fileId: string, meta: ListingJSON) => {
+  const onBuy = async (fileId: string, meta: AnyListingJSON) => {
     try {
       setBusyId(fileId);
-      // IMPORTANT: use listingId, not ticketId
+
+      const priceMist = pickPriceMist(meta);
+      if (priceMist === null) throw new Error("No price found in listing.");
+      if (!meta.ticketId) throw new Error("No ticketId in listing.");
+
       const res = await buyListing(
         pkg,
-        meta.listingId,
-        BigInt(meta.price),
+        meta.ticketId,
+        priceMist,
         { signAndExecuteTransaction: signAndExecute }
       );
+
       const digest =
         res?.digest ||
         res?.effectsDigest ||
         res?.effects?.transactionDigest ||
         res?.certificate?.transactionDigest;
+
       alert(`Bought successfully${digest ? `\nDigest: ${digest}` : ""}`);
     } catch (e: any) {
       alert(`Buy failed: ${e?.message || String(e)}`);
@@ -131,18 +172,18 @@ export function TicketHub() {
             )}
 
             {rows.map(({ file, meta }) => {
-              const created = new Date(Number(file.createdAt || Date.now())).toLocaleString();
+              const ticketId = meta?.ticketId ?? file.name.replace(/^listing-/, "").replace(/\.json$/, "");
+              const artist =
+                meta?.artist_name?.trim() ||
+                (meta?.artist_code ? ["", "SABR", "BILL", "BTS", "MARO"][meta.artist_code] : undefined) ||
+                inferArtist(ticketId);
+              const seat =
+                typeof meta?.seat === "number" && meta.seat > 0 ? `Seat ${meta.seat}` : inferSeat(ticketId);
 
-              // For the table we still *display* the ticketId if present (nice UX),
-              // but the buy call will use meta.listingId.
-              const ticketId =
-                meta?.ticketId ??
-                file.name.replace(/^listing-/, "").replace(/\.json$/, "");
+              const priceMist = meta ? pickPriceMist(meta) : null;
+              const priceSui = priceMist !== null ? mistToSui(priceMist) : "—";
 
-              const artist = inferArtist(ticketId);
-              const seat = inferSeat(ticketId);
-              const priceMist = meta ? BigInt(meta.price) : 0n;
-              const priceSui = mistToSui(priceMist);
+              const created = meta ? pickCreatedAt(meta, file) : new Date().toLocaleString();
 
               return (
                 <tr key={file.id} className="border-b">
@@ -151,11 +192,11 @@ export function TicketHub() {
                   <td className="py-2 pr-4 font-mono" title={ticketId}>
                     {ticketId.slice(0, 14)}…
                   </td>
-                  <td className="py-2 pr-4">{meta ? priceSui : "—"}</td>
+                  <td className="py-2 pr-4">{priceSui}</td>
                   <td className="py-2 pr-4">{created}</td>
                   <td className="py-2 pr-4">
                     <button
-                      disabled={!canBuy || !meta || busyId === file.id}
+                      disabled={!meta || !canBuy || busyId === file.id}
                       onClick={() => meta && onBuy(file.id, meta)}
                       className="rounded-md px-3 py-1 bg-primary text-primary-foreground disabled:opacity-50"
                     >

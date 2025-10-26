@@ -2,6 +2,7 @@ import { MarketplaceHeader } from "@/components/marketplace-header";
 import { DashboardTabs } from "@/components/dashboard-tabs";
 import { ListingTable } from "@/components/listing-table";
 import { TicketHub } from "@/components/ticket-hub";
+import { LoyalFanHub } from "@/components/loyalfan-hub";
 
 export default function DashboardPage() {
   return (
@@ -18,6 +19,11 @@ export default function DashboardPage() {
         <section>
           <h2 className="text-xl font-semibold mb-3"></h2>
            <TicketHub />
+                       <h2 className="text-xl font-semibold mb-3"></h2>
+
+  <LoyalFanHub />
+                       <h2 className="text-xl font-semibold mb-3"></h2>
+
                      <h2 className="text-xl font-semibold mb-3">Details</h2>
 
                      <ListingTable />
