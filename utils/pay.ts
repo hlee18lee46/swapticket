@@ -1,45 +1,75 @@
 // utils/pay.ts
-import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
 import { Transaction } from "@mysten/sui/transactions";
+import { sui } from "@/lib/sui";
+
+type SignAndExecute = (input: {
+  transaction: Transaction;
+  chain?: string;
+  options?: { showEffects?: boolean; showEvents?: boolean };
+}) => Promise<any>;
 
 export async function payWithCoin(opts: {
-  owner: string;   // connected wallet address (used only for coin lookup)
-  coinType: string;
-  amount: bigint;  // base units
-  recipient: string;
-  signAndExecute: (input: { transaction: Transaction; chain?: string }) => Promise<any>;
+  owner: string;                 // connected wallet (sender)
+  coinType: string;              // fully qualified: 0x...::mod::SYMBOL
+  amount: bigint;                // base units (u64)
+  recipient: string;             // 0x... address
+  signAndExecute: SignAndExecute;
 }) {
   const { owner, coinType, amount, recipient, signAndExecute } = opts;
-  if (amount <= 0n) throw new Error("Amount must be > 0");
 
-  const network = (process.env.NEXT_PUBLIC_SUI_NETWORK || "testnet") as
-    | "mainnet" | "testnet" | "devnet";
-  const client = new SuiClient({ url: getFullnodeUrl(network) });
+  if (!owner) throw new Error("Missing owner (sender) address");
+  if (!recipient) throw new Error("Missing recipient address");
+  if (amount <= 0n) throw new Error("Amount must be greater than 0");
+  if (!coinType.includes("::")) throw new Error(`Invalid coin type: ${coinType}`);
 
-  // 1) Get coins of that type for the connected owner
-  const { data: coins = [] } = await client.getCoins({ owner, coinType, limit: 200 });
-  if (!coins.length) {
-    throw new Error(`No coins of type ${coinType} for ${owner}`);
+  // Gather enough coins of the requested type
+  let cursor: string | null | undefined = undefined;
+  const coins: { coinObjectId: string; balance: bigint }[] = [];
+  let total = 0n;
+
+  do {
+    const page = await sui.getCoins({ owner, coinType, cursor, limit: 50 });
+    for (const c of page.data ?? []) {
+      const bal = BigInt(c.balance ?? "0");
+      coins.push({ coinObjectId: c.coinObjectId, balance: bal });
+      total += bal;
+      if (total >= amount) break;
+    }
+    cursor = page.nextCursor;
+  } while (cursor && total < amount);
+
+  if (coins.length === 0) {
+    throw new Error(`No coins of type ${coinType} found for ${owner}`);
   }
-
-  // 2) Pick ONE coin that already has enough to cover amount — no merges
-  const bigEnough = coins.find(c => BigInt(c.balance) >= amount);
-  if (!bigEnough) {
-    // (Optional) You could fall back to merging here, but we avoid it to reduce mismatch risk.
-    const total = coins.reduce((acc, c) => acc + BigInt(c.balance), 0n);
+  if (total < amount) {
     throw new Error(
-      `Insufficient balance: have ${total.toString()}, need ${amount.toString()} (${coinType}).`
+      `Insufficient balance of ${coinType}. Need ${amount}, have ${total}`
     );
   }
 
-  // 3) Build tx WITHOUT setting sender (wallet will inject it)
+  // Build tx: merge -> split -> transfer
   const tx = new Transaction();
-  const [toSend] = tx.splitCoins(tx.object(bigEnough.coinObjectId), [amount]);
-  tx.transferObjects([toSend], tx.pure.address(recipient));
 
-  // Don’t set gas budget or sender — let wallet handle them
+  // Make coin objects
+  const coinObjs = coins.map((c) => tx.object(c.coinObjectId));
+  const primary = coinObjs[0];
+
+  if (coinObjs.length > 1) {
+    tx.mergeCoins(primary, coinObjs.slice(1)); // only call if there are extras
+  }
+
+  // Split exactly one output for the payment amount
+  const [payment] = tx.splitCoins(primary, [tx.pure.u64(amount)]);
+
+  // Send payment to recipient
+  tx.transferObjects([payment], tx.pure.address(recipient));
+
+  // Let wallet set sender automatically; just be sure chain matches your env
+  const chain = `sui:${process.env.NEXT_PUBLIC_SUI_NETWORK || "testnet"}`;
+
   return signAndExecute({
     transaction: tx,
-    chain: `sui:${network}`,
+    chain,
+    options: { showEffects: true, showEvents: true },
   });
 }

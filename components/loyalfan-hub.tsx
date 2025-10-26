@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useCurrentAccount, useSignAndExecuteTransaction } from "@mysten/dapp-kit";
 import { getCoinDecimals, formatUnits, KNOWN_TYPES, resolveHeldCoinType } from "@/utils/coins";
 import { payWithCoin } from "@/utils/pay";
+import { mintReceipt } from "@/utils/receipt";
 
 type TuskyFile = {
   id: string;                // uploadId
@@ -19,7 +20,7 @@ type LoyalFanJSON = {
   seller: string;
   artist: "BILL" | "BTS" | "MARO" | "SABR" | string;
   coinType: string;
-  priceUnits: string;        // u64 in base units
+  priceUnits: string;        // u64 (base units)
   title: string;
   description?: string | null;
   image?: string | null;
@@ -27,11 +28,11 @@ type LoyalFanJSON = {
   network?: string;
 };
 
-function shortAddr(a: string) {
+const shortAddr = (a: string) => {
   if (!a) return "";
   const s = a.startsWith("0x") ? a.slice(2) : a;
   return `0x${s.slice(0, 6)}…${s.slice(-4)}`;
-}
+};
 const ticker = (t: string) => t.split("::").pop() || "COIN";
 
 export function LoyalFanHub() {
@@ -45,14 +46,19 @@ export function LoyalFanHub() {
 
   const canPay = useMemo(() => Boolean(account?.address), [account?.address]);
 
-  // 1) list Tusky files
+  // 1) list Tusky files (hide anything marked SOLD)
   useEffect(() => {
     (async () => {
-      const r = await fetch("/api/tusky/list");
-      if (!r.ok) return;
-      const all: TuskyFile[] = await r.json();
-      setFiles(all.filter((f) => f.name.endsWith(".json")));
-    })().catch(console.error);
+      try {
+        const r = await fetch("/api/tusky/list");
+        if (!r.ok) return;
+        const all: TuskyFile[] = await r.json();
+        const active = all.filter((f) => f.name.endsWith(".json") && !f.name.includes("-SOLD-"));
+        setFiles(active);
+      } catch (e) {
+        console.error("Failed to fetch Tusky listings:", e);
+      }
+    })();
   }, []);
 
   // 2) read only kind=loyalfan JSONs
@@ -93,48 +99,80 @@ export function LoyalFanHub() {
     })();
   }, [rows]);
 
-  // 4) pay with the coin type the wallet actually holds
+  // 4) pay with the coin type the wallet actually holds, then mint receipt, then settle the listing
   const onPay = async (row: { file: TuskyFile; meta: LoyalFanJSON }) => {
-    const meta = row.meta!;
-      console.log("connected wallet:", account?.address);
-  console.log("network env:", process.env.NEXT_PUBLIC_SUI_NETWORK);
-  console.log("priceUnits:", meta.priceUnits);
+    const { file, meta } = row;
     try {
       if (!account?.address) throw new Error("Connect your wallet first.");
-      setBusy(row.file.id);
+      setBusy(file.id);
 
       const amount = BigInt(meta.priceUnits);
-
-      // choose the package version the wallet holds for this artist
-      const candidates = KNOWN_TYPES[meta.artist as "BILL"|"BTS"|"MARO"|"SABR"];
+      const candidates = KNOWN_TYPES[meta.artist as "BILL" | "BTS" | "MARO" | "SABR"];
       if (!candidates) throw new Error(`Unknown artist: ${meta.artist}`);
 
       const chosen = await resolveHeldCoinType(account.address, candidates, amount);
       if (!chosen) {
         throw new Error(
-          `No spendable ${meta.artist} coins found for this wallet.\n` +
-          `Required ≥ ${meta.priceUnits} base units.`
+          `No spendable ${meta.artist} coins found for this wallet.\nRequired ≥ ${meta.priceUnits} base units.`
         );
       }
-console.log("connected wallet:", account?.address);
-console.log("network env:", process.env.NEXT_PUBLIC_SUI_NETWORK);
-console.log("priceUnits:", meta.priceUnits);
 
-setBusy(row.file.id);
-      const res = await payWithCoin({
-        owner: account!.address!,          // must be the connected wallet
-        coinType: chosen,                  // resolved held coin type
-        amount: BigInt(meta.priceUnits),
+      // 4a) payment
+      const payRes = await payWithCoin({
+        owner: account.address,
+        coinType: chosen,
+        amount,
         recipient: meta.seller,
         signAndExecute,
       });
+
       const digest =
-        res?.digest ||
-        res?.effectsDigest ||
-        res?.effects?.transactionDigest ||
-        res?.certificate?.transactionDigest;
+        payRes?.digest ||
+        payRes?.effectsDigest ||
+        payRes?.effects?.transactionDigest ||
+        payRes?.certificate?.transactionDigest;
+
+      // 4b) mint receipt (best-effort)
+      try {
+await mintReceipt({
+  pkg: process.env.NEXT_PUBLIC_PACKAGE_ID!,
+  buyer: account!.address!,
+  seller: meta.seller,
+  artist: meta.artist,
+  title: meta.title,
+  coinTicker: ticker(chosen),           // or ticker(meta.coinType)
+  amountUnits: BigInt(meta.priceUnits),
+  signAndExecute: async (tx) => {
+    return await signAndExecute({ transaction: tx, chain: `sui:${process.env.NEXT_PUBLIC_SUI_NETWORK}` as any });
+  },
+});
+      } catch (e) {
+        console.warn("mintReceipt failed (continuing):", e);
+      }
+
+      // 4c) mark the listing as settled (server will delete/rename in Tusky)
+      if (digest) {
+        await fetch("/api/loyalfan/settle", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            uploadId: file.id,
+            digest,
+            expected: {
+              seller: meta.seller,
+              artist: meta.artist,
+              coinType: chosen,                // use the coin type we actually used
+              priceUnits: meta.priceUnits,
+              title: meta.title,
+            },
+          }),
+        }).catch(() => {});
+      }
 
       alert(`Payment sent${digest ? `\nDigest: ${digest}` : ""}`);
+
+      // remove the row locally so the button disappears without full refresh
+      setRows((prev) => prev.filter((r) => r.file.id !== file.id));
     } catch (e: any) {
       alert(`Payment failed: ${e?.message || String(e)}`);
     } finally {
@@ -160,7 +198,7 @@ setBusy(row.file.id);
             </tr>
           </thead>
           <tbody>
-            {rows.filter(r => r.meta).length === 0 && (
+            {rows.filter((r) => r.meta).length === 0 && (
               <tr>
                 <td colSpan={7} className="py-6 text-muted-foreground">
                   No LoyalFan goods yet.
@@ -168,7 +206,7 @@ setBusy(row.file.id);
               </tr>
             )}
 
-            {rows.filter(r => r.meta).map(({ file, meta }) => {
+            {rows.filter((r) => r.meta).map(({ file, meta }) => {
               const created = meta!.createdAt
                 ? new Date(meta!.createdAt).toLocaleString()
                 : new Date(Number(file.createdAt || Date.now())).toLocaleString();
