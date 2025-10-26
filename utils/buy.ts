@@ -1,32 +1,27 @@
 // utils/buy.ts
 import { Transaction } from "@mysten/sui/transactions";
 
-type SignAndExecute = (input: {
+type SignAndExecute = (args: {
   transaction: Transaction;
   chain?: string;
   options?: { showEffects?: boolean; showEvents?: boolean };
 }) => Promise<any>;
 
-/**
- * Adjust target and arguments to match your Move entrypoint.
- * Common pattern: public entry fun buy(ticket: Ticket, payment: Coin<SUI>, ctx: &mut TxContext)
- */
 export async function buyListing(
   packageId: string,
-  ticketId: string,
+  listingId: string,
   priceMist: bigint,
   signer: { signAndExecuteTransaction: SignAndExecute },
 ) {
   const tx = new Transaction();
 
-  // Pay in SUI (MIST) out of gas coin
+  // split exact amount from gas into a Coin<SUI>
   const [payment] = tx.splitCoins(tx.gas, [tx.pure.u64(priceMist)]);
 
-  // If your market works on a Listing object instead of a raw Ticket,
-  // change tx.object(ticketId) to the listing id.
+  // pass Listing object (shared) + payment coin
   tx.moveCall({
     target: `${packageId}::market::buy`,
-    arguments: [tx.object(ticketId), payment],
+    arguments: [tx.object(listingId), payment],
   });
 
   return signer.signAndExecuteTransaction({

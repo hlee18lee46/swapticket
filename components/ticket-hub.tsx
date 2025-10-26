@@ -6,10 +6,11 @@ import { useCurrentAccount, useSignAndExecuteTransaction } from "@mysten/dapp-ki
 import { mistToSui } from "@/utils/price";
 import { buyListing } from "@/utils/buy";
 
-// Temporary: infer artist/seat until your on-chain metadata includes them
+// Temporary: infer artist/seat until on-chain metadata includes them
 const inferArtist = (ticketId: string) => {
-  if (ticketId.toLowerCase().includes("90d5")) return "BILL";
-  if (ticketId.toLowerCase().includes("6c63")) return "BTS";
+  const id = ticketId.toLowerCase();
+  if (id.includes("90d5")) return "BILL";
+  if (id.includes("6c63")) return "BTS";
   return "SABR";
 };
 const inferSeat = (_ticketId: string) => "Seat ?";
@@ -24,8 +25,9 @@ type TuskyFile = {
 
 type ListingJSON = {
   kind: "listing";
-  ticketId: string;
-  price: string;             // u64 as string (MIST)
+  listingId: string;         // <-- REQUIRED for buy
+  ticketId?: string;         // for display only
+  price: string;             // u64 (MIST) as string
   network?: string;
   createdAt?: string;
 };
@@ -39,6 +41,7 @@ export function TicketHub() {
   const [busyId, setBusyId] = useState<string>("");
 
   const pkg = process.env.NEXT_PUBLIC_PACKAGE_ID!;
+  const appNet = (process.env.NEXT_PUBLIC_SUI_NETWORK || "testnet").toLowerCase();
   const canBuy = useMemo(() => Boolean(account?.address), [account?.address]);
 
   // 1) List files from Tusky (server route)
@@ -47,7 +50,7 @@ export function TicketHub() {
       const r = await fetch("/api/tusky/list");
       if (!r.ok) return;
       const all: TuskyFile[] = await r.json();
-      // keep only listing JSONs we created
+      // keep only listing JSONs we created: listing-0x...json
       const listingFiles = all.filter((f) => /^listing-0x[0-9a-f]+\.json$/i.test(f.name));
       setFiles(listingFiles);
     })().catch(console.error);
@@ -62,25 +65,30 @@ export function TicketHub() {
           const r = await fetch(`/api/tusky/read?uploadId=${encodeURIComponent(f.id)}`);
           if (!r.ok) throw new Error(await r.text());
           const json = (await r.json()) as ListingJSON;
-          if (json && json.kind === "listing" && json.ticketId && json.price) {
-            out.push({ file: f, meta: json });
-          } else {
-            out.push({ file: f, meta: null });
-          }
+          // Must have kind=listing, listingId, price; and (optional) network must match app
+          const ok =
+            json &&
+            json.kind === "listing" &&
+            typeof json.listingId === "string" &&
+            typeof json.price === "string" &&
+            (!json.network || json.network.toLowerCase() === appNet);
+
+          out.push({ file: f, meta: ok ? json : null });
         } catch {
           out.push({ file: f, meta: null });
         }
       }
       setRows(out);
     })();
-  }, [files]);
+  }, [files, appNet]);
 
   const onBuy = async (fileId: string, meta: ListingJSON) => {
     try {
       setBusyId(fileId);
+      // IMPORTANT: use listingId, not ticketId
       const res = await buyListing(
         pkg,
-        meta.ticketId,
+        meta.listingId,
         BigInt(meta.price),
         { signAndExecuteTransaction: signAndExecute }
       );
@@ -124,7 +132,13 @@ export function TicketHub() {
 
             {rows.map(({ file, meta }) => {
               const created = new Date(Number(file.createdAt || Date.now())).toLocaleString();
-              const ticketId = meta?.ticketId ?? file.name.replace(/^listing-/, "").replace(/\.json$/, "");
+
+              // For the table we still *display* the ticketId if present (nice UX),
+              // but the buy call will use meta.listingId.
+              const ticketId =
+                meta?.ticketId ??
+                file.name.replace(/^listing-/, "").replace(/\.json$/, "");
+
               const artist = inferArtist(ticketId);
               const seat = inferSeat(ticketId);
               const priceMist = meta ? BigInt(meta.price) : 0n;

@@ -1,45 +1,103 @@
 // utils/listing.ts
 import { Transaction } from "@mysten/sui/transactions";
+import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
 
-type SignAndExecute = (input: {
+type SignAndExecuteTransaction = (input: {
   transaction: Transaction;
   chain?: string;
-  options?: { showEffects?: boolean; showEvents?: boolean; showObjectChanges?: boolean };
+  options?: {
+    showEffects?: boolean;
+    showEvents?: boolean;
+    showObjectChanges?: boolean;
+  };
 }) => Promise<any>;
 
-function extractListingId(res: any): string | null {
-  // Prefer modern objectChanges
-  const oc = res?.objectChanges ?? [];
-  const c = oc.find((x: any) => x?.type === "created" && String(x.objectType || "").endsWith("::market::Listing"));
-  if (c?.objectId) return c.objectId;
+function findCreatedOfType(res: any, fullType: string): string | null {
+  const changes: any[] = res?.objectChanges || res?.effects?.objectChanges || [];
+  for (const ch of changes) {
+    if (ch?.type === "created" && ch?.objectType === fullType && ch?.objectId) {
+      return ch.objectId as string;
+    }
+  }
+  return null;
+}
 
-  // Fallback to legacy effects.created (shared object)
-  const created = res?.effects?.created ?? [];
-  const shared = created.find((x: any) => x?.owner?.Shared && x?.reference?.objectId);
-  return shared?.reference?.objectId ?? null;
+async function getTxWithRetry(
+  client: SuiClient,
+  digest: string,
+  maxAttempts = 8,
+  initialDelayMs = 300
+) {
+  let attempt = 0;
+  let delay = initialDelayMs;
+  // simple backoff: 0.3s, 0.6s, 1.2s, 2.4s, ...
+  while (true) {
+    try {
+      return await client.getTransactionBlock({
+        digest,
+        options: { showObjectChanges: true, showEffects: true, showEvents: true },
+      });
+    } catch (e: any) {
+      attempt++;
+      if (attempt >= maxAttempts) throw e;
+      await new Promise((r) => setTimeout(r, delay));
+      delay = Math.min(delay * 2, 2000);
+    }
+  }
 }
 
 export async function createListing(
   packageId: string,
   ticketId: string,
-  priceMist: bigint,
-  signer: { signAndExecuteTransaction: SignAndExecute }
+  price: bigint,
+  signer: { signAndExecuteTransaction: SignAndExecuteTransaction }
 ) {
+  const network = process.env.NEXT_PUBLIC_SUI_NETWORK || "testnet";
+  const chain = `sui:${network}`;
+
   const tx = new Transaction();
   tx.moveCall({
     target: `${packageId}::market::create_listing`,
-    arguments: [tx.object(ticketId), tx.pure.u64(priceMist)],
+    arguments: [tx.object(ticketId), tx.pure.u64(price)],
   });
   tx.setGasBudget(20_000_000);
 
-  const res = await signer.signAndExecuteTransaction({
+  const execRes = await signer.signAndExecuteTransaction({
     transaction: tx,
-    chain: `sui:${process.env.NEXT_PUBLIC_SUI_NETWORK || "testnet"}`,
-    options: { showEffects: true, showEvents: true, showObjectChanges: true },
+    chain,
+    options: {
+      showEffects: true,
+      showEvents: true,
+      showObjectChanges: true,
+    },
   });
 
-  const listingId = extractListingId(res);
-  if (!listingId) throw new Error("Could not find created Listing object id.");
+  const listingType = `${packageId}::market::Listing`;
 
-  return { digest: res?.digest ?? res?.effectsDigest ?? null, listingId };
+  // try to extract right away
+  let listingId = findCreatedOfType(execRes, listingType);
+
+  // compute a digest we can poll with
+  const digest =
+    execRes?.digest ||
+    execRes?.effectsDigest ||
+    execRes?.effects?.transactionDigest ||
+    execRes?.certificate?.transactionDigest;
+
+  if (!listingId) {
+    if (!digest) {
+      throw new Error("Transaction succeeded but no digest was returned.");
+    }
+    // same network as sign step:
+    const client = new SuiClient({ url: getFullnodeUrl(network as any) });
+    // poll until the fullnode indexes this digest
+    const full = await getTxWithRetry(client, digest);
+    listingId = findCreatedOfType(full, listingType);
+  }
+
+  if (!listingId) {
+    throw new Error("Could not detect Listing object id (re-check package id & module name).");
+  }
+
+  return { digest, listingId };
 }

@@ -16,9 +16,12 @@ export default function DashboardPage() {
         </header>
 
         <section>
-          <h2 className="text-xl font-semibold mb-3">Ticket Hub</h2>
-          <ListingTable />
+          <h2 className="text-xl font-semibold mb-3"></h2>
            <TicketHub />
+                     <h2 className="text-xl font-semibold mb-3">Details</h2>
+
+                     <ListingTable />
+
         </section>
       </div>
     </div>
