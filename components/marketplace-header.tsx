@@ -127,6 +127,12 @@ export function MarketplaceHeader() {
             >
               Dashboard
             </Link>
+                        <Link
+              href="/Admin"
+              className="text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+            >
+              Admin Mint
+            </Link>
           </nav>
         </div>
 

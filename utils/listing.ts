@@ -1,38 +1,39 @@
-// utils/listing.ts
-// Dual-support for both SDKs (Transaction or TransactionBlock)
-import * as txns from "@mysten/sui.js/transactions";
+import { Transaction } from "@mysten/sui/transactions";
 
-function makeTx(): any {
-  // If new SDK, construct Transaction; otherwise TransactionBlock
-  return (txns as any).Transaction
-    ? new (txns as any).Transaction()
-    : new (txns as any).TransactionBlock();
-}
+type SignAndExecuteTransaction = (input: {
+  transaction: Transaction;
+  chain?: string;
+  options?: {
+    showEffects?: boolean;
+    showEvents?: boolean;
+  };
+}) => Promise<any>;
 
 export async function createListing(
   packageId: string,
   ticketId: string,
   price: bigint,
-  signer: { signAndExecuteTransaction: (args: any) => Promise<any> }
+  signer: { signAndExecuteTransaction: SignAndExecuteTransaction }
 ) {
-  const tx = makeTx();
+  const tx = new Transaction();
 
-  // argument builders differ slightly between SDKs; normalize:
-  const isNew = Boolean((txns as any).Transaction);
-  const obj   = isNew ? (tx as any).object(ticketId)  : (tx as any).object(ticketId);
-  const u64   = isNew ? (tx as any).pure.u64(price)   : (tx as any).pure(price, "u64");
-
-  (tx as any).moveCall({
+  tx.moveCall({
     target: `${packageId}::market::create_listing`,
-    arguments: [obj, u64],
+    arguments: [
+      tx.object(ticketId),
+      tx.pure.u64(price),
+    ],
   });
 
-  // optional
-  if ((tx as any).setGasBudget) (tx as any).setGasBudget(20_000_000);
+  // Set gas budget if needed
+  tx.setGasBudget(20_000_000);
 
   return signer.signAndExecuteTransaction({
     transaction: tx,
-    chain: "sui:testnet",           // change if you’re on mainnet
-    options: { showEffects: true, showEvents: true },
+    chain: `sui:${process.env.NEXT_PUBLIC_SUI_NETWORK || "testnet"}`,
+    options: { 
+      showEffects: true, 
+      showEvents: true 
+    },
   });
 }
