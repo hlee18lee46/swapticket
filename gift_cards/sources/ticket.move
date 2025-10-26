@@ -1,6 +1,8 @@
 module gift_cards::ticket {
     use sui::object;
     use sui::tx_context::TxContext;
+    use sui::transfer;
+    use std::string::String;
 
     // Artist codes (kept private as constants)
     const ARTIST_SABR: u8 = 1;
@@ -8,22 +10,28 @@ module gift_cards::ticket {
     const ARTIST_BTS:  u8 = 3;
     const ARTIST_MARO: u8 = 4;
 
-    // legacy edition: DO NOT write `public struct`
+    /// Ticket now stores metadata_url as a String
     struct Ticket has key, store {
         id: object::UID,
         artist: u8,
         price: u64,
+        metadata_url: String,
     }
 
-    /// Mint a ticket to a recipient (organizer calls this)
+    /// Mint a ticket with a metadata URL to a recipient (organizer calls this)
     public entry fun mint_ticket(
         artist: u8,
         price: u64,
+        metadata_url: String,
         recipient: address,
         ctx: &mut TxContext
     ) {
-        use sui::transfer;
-        let t = Ticket { id: object::new(ctx), artist, price };
+        let t = Ticket { 
+            id: object::new(ctx), 
+            artist, 
+            price, 
+            metadata_url 
+        };
         transfer::public_transfer(t, recipient)
     }
 
@@ -37,8 +45,13 @@ module gift_cards::ticket {
 
     /// Burn a ticket and return its artist code (so other modules don’t destruct it).
     public fun burn_and_get_artist(t: Ticket): u8 {
-        let Ticket { id, artist, price: _ } = t;
+        let Ticket { id, artist, price: _, metadata_url: _ } = t;
         object::delete(id);
         artist
+    }
+
+    /// Optional helper: allows updating metadata after minting (e.g., fix broken URL)
+    public entry fun set_metadata_url_string(t: &mut Ticket, new_url: String) {
+        t.metadata_url = new_url;
     }
 }
