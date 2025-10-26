@@ -1,98 +1,45 @@
 // utils/pay.ts
+import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
 import { Transaction } from "@mysten/sui/transactions";
-import { sui } from "@/lib/sui";
 
-// cache for coin metadata requests
-const metaCache = new Map<string, { decimals: number; symbol?: string; name?: string }>();
-
-export async function getCoinMetadataCached(coinType: string) {
-  if (metaCache.has(coinType)) return metaCache.get(coinType)!;
-  try {
-    const meta = await sui.getCoinMetadata({ coinType });
-    const out = {
-      decimals: meta?.decimals ?? 9,
-      symbol: meta?.symbol ?? undefined,
-      name: meta?.name ?? undefined,
-    };
-    metaCache.set(coinType, out);
-    return out;
-  } catch {
-    const out = { decimals: 9, symbol: undefined, name: undefined };
-    metaCache.set(coinType, out);
-    return out;
-  }
-}
-
-export function formatUnits(amount: bigint, decimals = 9): string {
-  const base = BigInt(10) ** BigInt(decimals);
-  const whole = amount / base;
-  const frac = amount % base;
-  const fracStr = frac.toString().padStart(decimals, "0").replace(/0+$/, "");
-  return fracStr ? `${whole.toString()}.${fracStr}` : whole.toString();
-}
-
-async function pickSingleCoinWithBalance(
-  owner: string,
-  coinType: string,
-  minAmount: bigint,
-): Promise<{ coinObjectId: string; balance: bigint } | null> {
-  let next: string | null = null;
-  do {
-    const page = await sui.getCoins({ owner, coinType, cursor: next ?? undefined, limit: 50 });
-    for (const c of page.data ?? []) {
-      const bal = BigInt(c.balance);
-      if (bal >= minAmount) {
-        return { coinObjectId: c.coinObjectId, balance: bal };
-      }
-    }
-    next = page.nextCursor ?? null;
-  } while (next);
-  return null;
-}
-
-type SignAndExecute = (input: { transaction: Transaction }) => Promise<any>;
-
-/**
- * Transfer `amount` units of `coinType` to `recipient`.
- * Requires at least one coin object with sufficient balance.
- */
-export async function payWithCoin(args: {
+export async function payWithCoin(opts: {
+  owner: string;   // connected wallet address (used only for coin lookup)
   coinType: string;
-  amount: bigint;
+  amount: bigint;  // base units
   recipient: string;
-  signAndExecute: SignAndExecute;
+  signAndExecute: (input: { transaction: Transaction; chain?: string }) => Promise<any>;
 }) {
-  const { coinType, amount, recipient, signAndExecute } = args;
+  const { owner, coinType, amount, recipient, signAndExecute } = opts;
+  if (amount <= 0n) throw new Error("Amount must be > 0");
 
-  // who is the payer? (current wallet)
-  // We can discover from sui client if needed, but dapp-kit signs with active account.
-  // For selecting a coin we need the address — we can query via /sui.system.getLatestSuiSystemState? No.
-  // In practice, passively rely on the active account in the wallet; however, getCoins needs owner address.
-  // Workaround: require wallet/extension to provide account; caller component knows account.address.
-  // For simplicity, throw if we can't infer.
-  const owner = (window as any).__suiActiveAddress as string | undefined;
-  // If you store account.address in context, consider threading it here instead.
+  const network = (process.env.NEXT_PUBLIC_SUI_NETWORK || "testnet") as
+    | "mainnet" | "testnet" | "devnet";
+  const client = new SuiClient({ url: getFullnodeUrl(network) });
 
-  // If the component doesn’t set window.__suiActiveAddress, do it there (see note in component).
-  if (!owner) {
-    throw new Error("Missing active owner address for coin selection.");
+  // 1) Get coins of that type for the connected owner
+  const { data: coins = [] } = await client.getCoins({ owner, coinType, limit: 200 });
+  if (!coins.length) {
+    throw new Error(`No coins of type ${coinType} for ${owner}`);
   }
 
-  const coin = await pickSingleCoinWithBalance(owner, coinType, amount);
-  if (!coin) {
-    const meta = await getCoinMetadataCached(coinType);
+  // 2) Pick ONE coin that already has enough to cover amount — no merges
+  const bigEnough = coins.find(c => BigInt(c.balance) >= amount);
+  if (!bigEnough) {
+    // (Optional) You could fall back to merging here, but we avoid it to reduce mismatch risk.
+    const total = coins.reduce((acc, c) => acc + BigInt(c.balance), 0n);
     throw new Error(
-      `No single ${coinType} coin has enough balance. Need ${formatUnits(amount, meta.decimals)} units. ` +
-      `Consolidate coins or receive more of this coin.`
+      `Insufficient balance: have ${total.toString()}, need ${amount.toString()} (${coinType}).`
     );
   }
 
+  // 3) Build tx WITHOUT setting sender (wallet will inject it)
   const tx = new Transaction();
-  const coinInput = tx.object(coin.coinObjectId);
-  const [toSend] = tx.splitCoins(coinInput, [tx.pure.u64(amount)]);
+  const [toSend] = tx.splitCoins(tx.object(bigEnough.coinObjectId), [amount]);
   tx.transferObjects([toSend], tx.pure.address(recipient));
 
-  tx.setGasBudget(20_000_000);
-
-  return signAndExecute({ transaction: tx });
+  // Don’t set gas budget or sender — let wallet handle them
+  return signAndExecute({
+    transaction: tx,
+    chain: `sui:${network}`,
+  });
 }

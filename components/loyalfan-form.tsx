@@ -1,24 +1,21 @@
 "use client";
 
 import { useCurrentAccount } from "@mysten/dapp-kit";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { sui } from "@/lib/sui"; // SuiClient instance with correct network
 
-// Generic decimal->base units converter (9 decimals by default)
-function toBaseUnits(input: string, decimals = 9): bigint {
+function toBaseUnits(input: string, decimals: number): bigint {
   const s = input.trim();
   if (!s) throw new Error("Enter a price.");
-  const sign = s.startsWith("-") ? -1n : 1n;
-  const raw = s.replace(/^[-+]/, "");
-  if (!/^\d*\.?\d*$/.test(raw)) throw new Error("Invalid number format.");
-  const [whole = "0", fracRaw = ""] = raw.split(".");
+  if (!/^\d*\.?\d*$/.test(s)) throw new Error("Invalid number format.");
+  const [whole = "0", fracRaw = ""] = s.split(".");
   const frac = (fracRaw + "0".repeat(decimals)).slice(0, decimals);
-  return sign * (BigInt(whole || "0") * BigInt(10) ** BigInt(decimals) + BigInt(frac || "0"));
+  return BigInt(whole || "0") * 10n ** BigInt(decimals) + BigInt(frac || "0");
 }
 
-// Map coin symbol -> Move type (uses your published package id)
+// Map coin symbol -> Move type
 function coinTypeOf(artist: "SABR" | "BILL" | "BTS" | "MARO"): string {
   const pkg = process.env.NEXT_PUBLIC_PACKAGE_ID!;
-  // Modules were published as: sabr::SABR, bill::BILL, bts::BTS, maro::MARO
   switch (artist) {
     case "SABR": return `${pkg}::sabr::SABR`;
     case "BILL": return `${pkg}::bill::BILL`;
@@ -29,17 +26,32 @@ function coinTypeOf(artist: "SABR" | "BILL" | "BTS" | "MARO"): string {
 
 export function LoyalFanForm() {
   const account = useCurrentAccount();
-  const [artist, setArtist] = useState<"SABR" | "BILL" | "BTS" | "MARO">("SABR");
-  const [title, setTitle] = useState("");
-  const [desc, setDesc] = useState("");
-  const [priceHuman, setPriceHuman] = useState(""); // human units of the artist coin
-  const [image, setImage] = useState<File | null>(null);
-  const [msg, setMsg] = useState("");
-  const [busy, setBusy] = useState(false);
 
-  const seller = account?.address || "";
-  const allowed = (process.env.NEXT_PUBLIC_SELLER_ADDRESS || "").toLowerCase();
-  const canPost = useMemo(() => !!seller && seller.toLowerCase() === allowed, [seller, allowed]);
+  const [artist, setArtist] = useState<"SABR" | "BILL" | "BTS" | "MARO">("SABR");
+  const [title, setTitle]   = useState("");
+  const [desc, setDesc]     = useState("");
+  const [priceHuman, setPriceHuman] = useState("");
+  const [image, setImage]   = useState<File | null>(null);
+  const [msg, setMsg]       = useState("");
+  const [busy, setBusy]     = useState(false);
+
+  const seller   = account?.address || "";
+  const allowed  = (process.env.NEXT_PUBLIC_SELLER_ADDRESS || "").toLowerCase();
+  const canPost  = useMemo(() => !!seller && seller.toLowerCase() === allowed, [seller, allowed]);
+
+  // NEW: fetch decimals for the selected coin
+  const [decimals, setDecimals] = useState<number>(9);
+  useEffect(() => {
+    const coinType = coinTypeOf(artist);
+    (async () => {
+      try {
+        const meta = await sui.getCoinMetadata({ coinType });
+        setDecimals(meta?.decimals ?? 9);
+      } catch {
+        setDecimals(9);
+      }
+    })();
+  }, [artist]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -51,23 +63,25 @@ export function LoyalFanForm() {
     }
 
     try {
-      // most Sui coins use 9 decimals; adjust if yours differ
-      const amount = toBaseUnits(priceHuman, 9);
+      const coinType  = coinTypeOf(artist);
+      const amount    = toBaseUnits(priceHuman, decimals);
       if (amount < 0n) throw new Error("Price must be non-negative.");
 
       const form = new FormData();
       form.set("seller", seller);
       form.set("title", title);
       form.set("description", desc);
-      form.set("artist", artist);                 // coin symbol
-      form.set("coinType", coinTypeOf(artist));   // fully-qualified Move type
-      form.set("priceUnits", amount.toString());  // base units (like MIST)
+      form.set("artist", artist);
+      form.set("coinType", coinType);
+      form.set("priceUnits", amount.toString()); // base units
+      form.set("decimals", String(decimals));    // <-- save it
       if (image) form.set("image", image, image.name);
 
       setBusy(true);
       const res = await fetch("/api/loyalfan/create", { method: "POST", body: form });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
+
       setMsg(`Posted! uploadId=${data.uploadId}${data.blobId ? ` · blobId=${data.blobId}` : ""}`);
       setTitle(""); setDesc(""); setPriceHuman(""); setImage(null);
     } catch (err: any) {
@@ -76,6 +90,12 @@ export function LoyalFanForm() {
       setBusy(false);
     }
   };
+
+  // Optional: preview the base units so you can sanity-check
+  let preview = "";
+  try {
+    if (priceHuman) preview = toBaseUnits(priceHuman, decimals).toString();
+  } catch { /* ignore */ }
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
@@ -97,6 +117,7 @@ export function LoyalFanForm() {
           <option value="BTS">BTS</option>
           <option value="MARO">MARO</option>
         </select>
+        <p className="mt-1 text-xs text-muted-foreground">Decimals: {decimals}</p>
       </div>
 
       <div>
@@ -132,6 +153,11 @@ export function LoyalFanForm() {
           onChange={(e) => setPriceHuman(e.target.value)}
           placeholder="e.g. 12.5"
         />
+        {!!preview && (
+          <p className="mt-1 text-xs text-muted-foreground">
+            Base units: <span className="font-mono">{preview}</span>
+          </p>
+        )}
       </div>
 
       <div>
