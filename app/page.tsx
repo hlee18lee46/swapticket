@@ -86,10 +86,10 @@ export default function MarketplacePage() {
         <div className="container mx-auto px-4 py-12 md:py-20">
           <div className="mx-auto max-w-3xl text-center">
             <h1 className="mb-4 text-4xl font-bold tracking-tight text-balance md:text-5xl lg:text-6xl">
-              Trade Tickets & Gift Cards <span className="text-primary">On-Chain</span>
+              Loyal Platform bridging fans and their <span className="text-primary">Artists</span>
             </h1>
             <p className="mb-8 text-lg text-muted-foreground text-balance md:text-xl">
-              Peer-to-peer marketplace with escrow protection. No middleman fees, no scalper manipulation.
+              Loyalty platform Powered by Artist custom coins, collect BILL, BTS, MARO, SABR
             </p>
 
             {/* Search Bar */}

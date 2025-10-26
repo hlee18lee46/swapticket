@@ -9,8 +9,8 @@ const _geist = Geist({ subsets: ["latin"] })
 const _geistMono = Geist_Mono({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
-  title: "SwapChain - Decentralized P2P Marketplace",
-  description: "Trade tickets and gift cards on-chain with escrow protection",
+  title: "LoyalTicket - Artist fan platform for ticket and special goods sale",
+  description: "Bridging the artists and fans",
   generator: "v0.app",
 }
 

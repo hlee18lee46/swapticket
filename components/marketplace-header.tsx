@@ -108,7 +108,7 @@ export function MarketplaceHeader() {
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-foreground">
               <div className="h-4 w-4 rounded-sm bg-primary" />
             </div>
-            <span className="text-xl font-bold">SwapChain</span>
+            <span className="text-xl font-bold">LoyalTicket</span>
           </Link>
 
           <nav className="hidden items-center gap-6 md:flex">
@@ -120,6 +120,12 @@ export function MarketplaceHeader() {
               className="text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
             >
               Create Listing
+            </Link>
+                        <Link
+              href="/loyalfan"
+              className="text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+            >
+              LoyalFan Goods
             </Link>
             <Link
               href="/dashboard"
