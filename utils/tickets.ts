@@ -36,5 +36,5 @@ export async function fetchOwnedTickets(owner: string, packageId: string): Promi
           : "",
       } as TicketRow;
     })
-    .filter(Boolean) as TicketRow[];
+    ;
 }

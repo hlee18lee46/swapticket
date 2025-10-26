@@ -122,36 +122,6 @@ export default function MarketplacePage() {
           </div>
         </div>
       </section>
-
-      {/* Listings Section */}
-      <section className="container mx-auto px-4 py-12">
-        <div className="mb-8 flex items-center justify-between">
-          <div>
-            <h2 className="text-2xl font-bold">Active Listings</h2>
-            <p className="text-muted-foreground">{listings.length} items available</p>
-          </div>
-
-          <Tabs defaultValue="all" className="w-auto">
-            <TabsList>
-              <TabsTrigger value="all">All</TabsTrigger>
-              <TabsTrigger value="tickets">Tickets</TabsTrigger>
-              <TabsTrigger value="giftcards">Gift Cards</TabsTrigger>
-            </TabsList>
-          </Tabs>
-        </div>
-
-        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-          {listings.map((listing) => (
-            <ListingCard key={listing.id} {...listing} />
-          ))}
-        </div>
-
-        <div className="mt-12 text-center">
-          <Button variant="outline" size="lg">
-            Load More Listings
-          </Button>
-        </div>
-      </section>
     </div>
   )
 }

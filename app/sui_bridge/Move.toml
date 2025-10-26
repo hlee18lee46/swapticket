@@ -1,0 +1,10 @@
+[package]
+name = "ticket_bridge"
+version = "0.0.1"
+
+[dependencies]
+Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework" }
+Ticket = { local = "../gift_cards" } # path to your existing package folder
+
+[addresses]
+ticket_bridge = "0x0"
